@@ -1,0 +1,23 @@
+{
+  "name": "fuse-memfs",
+  "version": "0.0.0",
+  "description": "An in-memory filesystem backed by FUSE",
+  "main": "index.js",
+  "dependencies": {
+    "filesystem-constants": "^1.0.0",
+    "fuse-native": "fuse-friends/fuse-native"
+  },
+  "bin": {
+    "fuse-memfs": "./bin.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mafintosh/fuse-memory.git"
+  },
+  "author": "Mathias Buus (@mafintosh)",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/mafintosh/fuse-memory/issues"
+  },
+  "homepage": "https://github.com/mafintosh/fuse-memory"
+}
