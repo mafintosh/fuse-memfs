@@ -1,47 +1,83 @@
 const constants = require('filesystem-constants')
 const c = process.platform === 'darwin' ? constants.darwin : constants.linux
 
-class Entry {
-  constructor (mode, opts) {
-    this.name = opts.name || ''
+class Inode {
+  constructor (fs, mode, opts) {
     this.ctime = new Date()
     this.atime = new Date()
     this.mtime = new Date()
     this.mode = mode
     this.uid = opts.uid || 0
     this.gid = opts.gid || 0
-    this.ino = opts.ino || 0
+    this.ino = opts.ino || (fs ? ++fs.inodes : 0)
     this.nlink = opts.nlink || 1
+    this.entries = []
+    this.blocks = []
+    this.size = 0
+  }
+}
+
+class Entry {
+  constructor (mode, opts) {
+    this.fs = opts.fs || null
+    this.name = opts.name || ''
+    this.inode = opts.inode || new Inode(opts.fs, mode, opts)
+    this.attributes = new Map()
   }
 
   isDirectory () {
-    return !!(this.mode & c.S_IFDIR)
+    return !!(this.inode.mode & c.S_IFDIR)
   }
 
   isFile () {
-    return !!(this.mode & c.S_IFREG)
+    return !!(this.inode.mode & c.S_IFREG)
+  }
+
+  setAttribute (name, val) {
+    this.attributes.set(name, val)
+  }
+
+  getAttribute (name) {
+    return this.attributes.get(name)
+  }
+
+  removeAttribute (name) {
+    this.attributes.delete(name)
+  }
+
+  listAttributes () {
+    return [ ...this.attributes.keys() ]
+  }
+
+  reset () {
+    this.inode.mtime = new Date()
+    this.inode.blocks = []
+    this.inode.size = 0
+    this.inode.entries = []
   }
 
   stat () {
+    const blocks = Math.ceil(this.inode.size / 512)
+
     return {
-      ctime: this.ctime,
-      atime: this.atime,
-      mtime: this.mtime,
-      mode: this.mode,
-      size: 512,
-      blocks: 1,
+      ctime: this.inode.ctime,
+      atime: this.inode.atime,
+      mtime: this.inode.mtime,
+      mode: this.inode.mode,
+      size: this.inode.size,
+      blocks,
       dev: 0,
       rdev: 0,
-      nlink: this.nlink,
-      ino: this.ino,
-      uid: this.uid,
-      gid: this.gid
+      nlink: this.inode.nlink,
+      ino: this.inode.ino,
+      uid: this.inode.uid,
+      gid: this.inode.gid
     }
   }
 
   chown (uid, gid) {
-    this.uid = uid
-    this.gid = gid
+    this.inode.uid = uid
+    this.inode.gid = gid
   }
 
   chmod (mode) {
@@ -51,39 +87,43 @@ class Entry {
         ? c.S_IFREG
         : 0
 
-    this.mode = mode | mask
+    this.inode.mode = mode | mask
   }
 
   utimes (atime, mtime) {
-    this.atime = timeToDate(atime)
-    this.mtime = timeToDate(mtime)
+    this.inode.atime = timeToDate(atime)
+    this.inode.mtime = timeToDate(mtime)
   }
 }
 
 class Directory extends Entry {
   constructor (opts = {}) {
     super(0 | 0o555 | 0o333 | c.S_IFDIR, opts)
-    this.entries = []
+    this.inode.size = 512
+  }
+
+  isEmpty () {
+    return this.inode.entries.length === 0
   }
 
   readdir () {
-    return this.entries.map(toName)
+    return this.inode.entries.map(entry => entry.name)
   }
 
   mkdir (name) {
     if (this.exists(name)) EEXIST('mkdir', name)
-    return this.push(new Directory({ name }))
+    return this.push(new Directory({ fs: this.fs, name }))
   }
 
   create (name, mode) {
     const exists = this.get(name)
 
     if (exists) {
-      exists.data = Buffer.alloc(0)
+      exists.reset()
       return exists
     }
 
-    return this.push(new File({ name, mode }))
+    return this.push(new File({ fs: this.fs, name, mode }))
   }
 
   exists (name) {
@@ -94,7 +134,7 @@ class Directory extends Entry {
     const exists = this.get(name)
     if (!exists) ENOENT('rmdir', name)
     if (!exists.isDirectory()) ENOTDIR('rmdir', name)
-    if (exists.entries.length) ENOTEMPTY('rmdir', name)
+    if (!exists.isEmpty()) ENOTEMPTY('rmdir', name)
     this.remove(exists)
   }
 
@@ -106,19 +146,22 @@ class Directory extends Entry {
   }
 
   remove (entry) {
-    const i = this.entries.indexOf(entry)
-    if (i > -1) this.entries.splice(i, 1)
-    this.mtime = new Date()
+    const i = this.inode.entries.indexOf(entry)
+    if (i > -1) {
+      this.inode.entries.splice(i, 1)
+      this.inode.mtime = new Date()
+      entry.inode.nlink--
+    }
   }
 
   push (entry) {
-    this.entries.push(entry)
-    this.mtime = new Date()
+    this.inode.entries.push(entry)
+    this.inode.mtime = new Date()
     return entry
   }
 
   get (name) {
-    for (const entry of this.entries) {
+    for (const entry of this.inode.entries) {
       if (entry.name === name) return entry
     }
     return null
@@ -130,35 +173,13 @@ const BLOCK_SIZE = 1024 * 1024
 class File extends Entry {
   constructor (opts = {}) {
     super(0 | 0o444 | 0o222 | c.S_IFREG, opts)
-
-    this.blocks = []
-    this.size = 0
-  }
-
-  stat () {
-    const blocks = Math.ceil(this.size / 512)
-
-    return {
-      ctime: this.ctime,
-      atime: this.atime,
-      mtime: this.mtime,
-      mode: this.mode,
-      size: this.size,
-      blocks,
-      dev: 0,
-      rdev: 0,
-      nlink: this.nlink,
-      ino: this.ino,
-      uid: this.uid,
-      gid: this.gid
-    }
   }
 
   truncate (size) {
-    this.size = size
+    this.inode.size = size
     const cnt = Math.ceil(size / BLOCK_SIZE)
-    this.blocks = this.blocks.slice(0, cnt)
-    this.mtime = new Date()
+    this.inode.blocks = this.inode.blocks.slice(0, cnt)
+    this.inode.mtime = new Date()
   }
 
   read (offset, buffer) {
@@ -166,11 +187,11 @@ class File extends Entry {
     let o = offset % BLOCK_SIZE
     let start = 0
 
-    while (start < buffer.length && offset < this.size) {
-      let blk = this.blocks[i++] || Buffer.alloc(BLOCK_SIZE)
+    while (start < buffer.length && offset < this.inode.size) {
+      let blk = this.inode.blocks[i++] || Buffer.alloc(BLOCK_SIZE)
 
-      if (i * BLOCK_SIZE + blk.length > this.size) {
-        blk = blk.slice(0, this.size - i * BLOCK_SIZE)
+      if (i * BLOCK_SIZE + blk.length > this.inode.size) {
+        blk = blk.slice(0, this.inode.size - i * BLOCK_SIZE)
       }
 
       if (o) {
@@ -183,7 +204,7 @@ class File extends Entry {
       start += blk.length
     }
 
-    this.atime = new Date()
+    this.inode.atime = new Date()
     return Math.min(buffer.length, start)
   }
 
@@ -192,13 +213,13 @@ class File extends Entry {
     let o = offset % BLOCK_SIZE
     let start = 0
 
-    if (offset + buffer.length > this.size) {
-      this.size = offset + buffer.length
+    if (offset + buffer.length > this.inode.size) {
+      this.inode.size = offset + buffer.length
     }
 
-    while (start < buffer.length && offset < this.size) {
-      if (!this.blocks[i]) this.blocks[i] = Buffer.alloc(BLOCK_SIZE)
-      let blk = this.blocks[i++]
+    while (start < buffer.length && offset < this.inode.size) {
+      if (!this.inode.blocks[i]) this.inode.blocks[i] = Buffer.alloc(BLOCK_SIZE)
+      let blk = this.inode.blocks[i++]
 
       if (o) {
         blk = blk.slice(o)
@@ -210,7 +231,7 @@ class File extends Entry {
       offset += blk.length
     }
 
-    this.mtime = new Date()
+    this.inode.mtime = new Date()
     return Math.min(buffer.length, start)
   }
 }
@@ -256,8 +277,9 @@ class FileDescriptor {
 class FileSystem {
   constructor () {
     this.constants = c
-    this.root = new Directory()
+    this.root = new Directory({ fs: this })
     this.fds = []
+    this.inodes = 0
   }
 
   lookup (path, name = 'lookup') {
@@ -279,6 +301,21 @@ class FileSystem {
     return desc
   }
 
+  link (from, to) {
+    const f = this._parentDir(from)
+    const t = this._parentDir(to)
+
+    const fe = f.parent.get(f.name)
+    if (!fe) ENOENT('link', from)
+    if (fe.isDirectory()) EISDIR('link', from)
+
+    const te = t.parent.get(t.name)
+    if (te) EEXIST('link', to)
+
+    fe.nlink++
+    t.parent.push(new File({ fs: this.fs, inode: fe.inode, name: t.name }))
+  }
+
   rename (from, to) {
     const f = this._parentDir(from)
     const t = this._parentDir(to)
@@ -291,7 +328,7 @@ class FileSystem {
     if (te) {
       if (te.isDirectory() && !fe.isDirectory()) EISDIR('rename', to)
       if (fe.isDirectory() && !te.isDirectory()) ENOTDIR('rename', to)
-      if (fe.isDirectory() && te.isDirectory() && te.entries.length) ENOTEMPTY('rename', to)
+      if (fe.isDirectory() && te.isDirectory() && !te.isEmpty()) ENOTEMPTY('rename', to)
       t.parent.remove(te)
     }
 
@@ -325,14 +362,14 @@ class FileSystem {
     if (file && !file.isFile()) EPERM('open', path)
     if (desc.exclusive && file) EEXIST('open', path)
     if (desc.readable && !desc.writable && !file) ENOENT('open', path)
-    if (file && !desc.appending && desc.writable) file.data = Buffer.alloc(0)
+    if (file && !desc.appending && desc.writable) file.reset()
 
     if (!file) {
       if (!desc.creating) ENOENT('open', path)
       file = parent.create(name, mode || 0)
     }
 
-    if (desc.appending) desc.position = file.data.length
+    if (desc.appending) desc.position = file.inode.size
     desc.file = file
 
     this.fds.push(desc)
@@ -356,6 +393,28 @@ class FileSystem {
     const desc = this.lookupFd(fd, 'write')
     if (typeof position === 'number') desc.position = position
     return desc.write(buf.slice(offset, offset + length))
+  }
+
+  setxattr (path, name, value) {
+    const entry = this.lookup(path, 'setxattr')
+    const buf = Buffer.from(value)
+    entry.setAttribute(name, buf)
+  }
+
+  getxattr (path, name) {
+    const entry = this.lookup(path, 'getxattr')
+    const val = entry.getAttribute(name)
+    return val
+  }
+
+  listxattr (path) {
+    const entry = this.lookup(path, 'listxattr')
+    return entry.listAttributes()
+  }
+
+  removexattr (path, name) {
+    const entry = this.lookup(path, 'listxattr')
+    entry.removeAttribute(name)
   }
 
   readdir (path) {
@@ -421,10 +480,6 @@ function notEmpty (s) {
 
 function timeToDate (ms) {
   return typeof ms === 'number' ? new Date(ms) : ms
-}
-
-function toName (e) {
-  return e.name
 }
 
 function ENOENT (method, name) {

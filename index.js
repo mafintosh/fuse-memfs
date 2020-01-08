@@ -20,6 +20,41 @@ module.exports = function (opts) {
         namemax: 1000000
       })
     },
+    getxattr (path, name, pos, cb) {
+      log('getxattr', path, name)
+      try {
+        cb(0, fs.getxattr(path, name))
+      } catch (err) {
+        console.log(err)
+        cb(err.errno)
+      }
+    },
+    setxattr (path, name, value, pos, flags, cb) {
+      log('setxattr', path, name, value)
+      try {
+        fs.setxattr(path, name, value)
+        cb(0)
+      } catch (err) {
+        cb(err.errno)
+      }
+    },
+    removexattr (path, name, cb) {
+      log('removexattr', path, name)
+      try {
+        fs.removexattr(path, name)
+        cb(0)
+      } catch (err) {
+        cb(err.errno)
+      }
+    },
+    listxattr (path, cb) {
+      log('listxattr', path)
+      try {
+        cb(0, fs.listxattr(path))
+      } catch (err) {
+        cb(err.errno)
+      }
+    },
     readdir (path, cb) {
       log('readdir', path)
       try {
@@ -61,6 +96,16 @@ module.exports = function (opts) {
         cb(0)
       } catch (err) {
         log(err)
+        cb(err.errno)
+      }
+    },
+    link (from, to, cb) {
+      log('link', from, to)
+      try {
+        fs.link(from, to)
+        cb(0)
+      } catch (err) {
+        console.log(err)
         cb(err.errno)
       }
     },
