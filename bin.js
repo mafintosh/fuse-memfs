@@ -2,7 +2,7 @@
 
 const Fuse = require('fuse-native')
 const memops = require('./')
-const f = new Fuse(process.argv[2] || './mnt', memops({ log: true }))
+const f = new Fuse(process.argv[2] || './mnt', memops({ log: true }), { autoCache: true })
 
 f.mount(function () {
   console.log('mounted ...')

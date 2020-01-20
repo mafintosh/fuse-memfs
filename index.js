@@ -25,7 +25,6 @@ module.exports = function (opts) {
       try {
         cb(0, fs.getxattr(path, name))
       } catch (err) {
-        console.log(err)
         cb(err.errno)
       }
     },
@@ -92,7 +91,6 @@ module.exports = function (opts) {
       log('ftruncate', path, fd, size)
       try {
         fs.ftruncate(fd, size)
-        log('truncted?')
         cb(0)
       } catch (err) {
         log(err)
@@ -105,7 +103,6 @@ module.exports = function (opts) {
         fs.link(from, to)
         cb(0)
       } catch (err) {
-        console.log(err)
         cb(err.errno)
       }
     },
