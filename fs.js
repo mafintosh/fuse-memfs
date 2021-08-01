@@ -332,6 +332,7 @@ class FileSystem {
       t.parent.remove(te)
     }
 
+    fe.name = t.name;
     f.parent.remove(fe)
     t.parent.push(fe)
   }
